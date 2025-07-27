@@ -24,6 +24,7 @@ require('dotenv').config();
 const axios = require('axios');
 const pdfParse = require('pdf-parse');
 const Syllabus = require('./models/Syllabus.js');
+const AdminConfig = require('./models/AdminConfig');
 
 
 // Connect to MongoDB
@@ -42,6 +43,8 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true
 }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 const {
     logAction,
     getSessionLogs,
@@ -49,6 +52,26 @@ const {
     getAllActions
 } = require(path.join(__dirname, 'fabric', 'Doc_function'));
 
+//changing the threshold of Relevence score divided into two- post and get
+app.get('/api/admin/config/relevance-threshold', async (req, res) => {
+    const config = await AdminConfig.findOne({ key: 'minRelevanceScore' });
+    res.json({ value: config?.value || 80 }); // default to 80 if not set
+});
+app.post('/api/admin/config/relevance-threshold', async (req, res) => {
+    const { value } = req.body;
+
+    if (typeof value !== 'number' || value < 0 || value > 100) {
+        return res.status(400).json({ error: 'Invalid threshold value' });
+    }
+
+    const config = await AdminConfig.findOneAndUpdate(
+        { key: 'minRelevanceScore' },
+        { value },
+        { upsert: true, new: true }
+    );
+
+    res.json({ message: 'Threshold updated', value: config.value });
+});
 
 // ✅ Route to log an action to the blockchain
 app.post('/blockchain/log', async (req, res) => {
@@ -976,6 +999,19 @@ Respond with ONLY the JSON object, no additional text.`;
             console.log('✅ GridFS upload successful:', gridFSFile._id);
 
             // STATUS DETERMINATION BASED ON RELEVANCE SCORE
+            // STATUS DETERMINATION BASED ON RELEVANCE SCORE
+
+            //making the relevance score dynamic
+            let minRelevanceScore = 80;
+            try {
+                const config = await AdminConfig.findOne({ key: 'minRelevanceScore' });
+                if (config && typeof config.value === 'number') {
+                    minRelevanceScore = config.value;
+                }
+            } catch (configError) {
+                console.warn('⚠️ Could not load admin threshold. Using default 80.');
+            }
+
             if (type.toLowerCase() !== 'notes') {
                 const existing = await Resource.countDocuments({
                     course,
@@ -986,7 +1022,7 @@ Respond with ONLY the JSON object, no additional text.`;
                 });
                 status = existing >= 2 ? 'pending' : 'approved';
             } else {
-                if (relevanceScore >= 80) {
+                if (relevanceScore >= minRelevanceScore) {
                     const existing = await Resource.countDocuments({
                         course,
                         semester,
@@ -999,6 +1035,7 @@ Respond with ONLY the JSON object, no additional text.`;
                     status = 'rejected';
                 }
             }
+
 
             console.log(`📊 Final Status Decision: ${status} (Score: ${relevanceScore}%)`);
 
